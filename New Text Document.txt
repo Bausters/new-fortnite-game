@@ -1,0 +1,207 @@
+using UnityEngine;
+using Mirror;
+
+public class PlayerController : NetworkBehaviour
+{
+    public Camera playerCamera;
+    public GameObject playerObject;
+    public GameObject spectatorCamera;
+
+    public float followSpeed = 5f;
+
+    [SyncVar] public int health = 100;
+    [SyncVar] public int wood = 0;
+    [SyncVar] public int stone = 0;
+    [SyncVar] public int metal = 0;
+    [SyncVar] public int teamID = 0; // Team 1 or Team 2
+
+    private bool isDead = false;
+    private PlayerMovement playerMovement;
+    private GameObject[] teammates;
+    private int currentTeammateIndex = 0;
+
+    public float respawnTime = 5f;
+    private float respawnTimer;
+
+    private void Start()
+    {
+        if (isLocalPlayer)
+        {
+            playerMovement = GetComponent<PlayerMovement>();
+            teammates = GameObject.FindGameObjectsWithTag("Player");
+            ActivatePlayer();
+        }
+    }
+
+    private void Update()
+    {
+        if (isDead && spectatorCamera.activeSelf)
+        {
+            // Spectator controls: Cycle through teammates with Q/E keys
+            if (Input.GetKeyDown(KeyCode.Q)) 
+            {
+                CycleTeammates(-1);
+            }
+            if (Input.GetKeyDown(KeyCode.E)) 
+            {
+                CycleTeammates(1);
+            }
+        }
+
+        if (isDead)
+        {
+            respawnTimer -= Time.deltaTime;
+            if (respawnTimer <= 0)
+            {
+                Respawn();
+            }
+        }
+    }
+
+    [Command] // Called from the client, executed on the server
+    public void CmdTakeDamage(int damage)
+    {
+        if (health > 0)
+        {
+            health -= damage;
+            RpcUpdateHealth(health);
+            if (health <= 0)
+            {
+                CmdDie();
+            }
+        }
+    }
+
+    [ClientRpc] // Updates health across all clients
+    void RpcUpdateHealth(int updatedHealth)
+    {
+        health = updatedHealth;
+    }
+
+    // This function is called when the player dies
+    [Command]
+    public void CmdDie()
+    {
+        RpcOnDeath(); // Notify all clients of death
+    }
+
+    [ClientRpc]
+    void RpcOnDeath()
+    {
+        isDead = true;
+        DeactivatePlayer(); // Disable player actions
+        EnableSpectatorMode(); // Enable spectator mode
+        respawnTimer = respawnTime; // Set the respawn timer
+    }
+
+    // Deactivate player actions and enable spectator mode
+    void DeactivatePlayer()
+    {
+        playerMovement.enabled = false;
+        playerCamera.enabled = false;
+        playerObject.SetActive(false);
+    }
+
+    // Enable the spectator camera
+    void EnableSpectatorMode()
+    {
+        spectatorCamera.SetActive(true);
+        StartSpectatingTeammates(); // Start following a teammate
+    }
+
+    // Start spectating the first living teammate
+    void StartSpectatingTeammates()
+    {
+        foreach (GameObject teammate in teammates)
+        {
+            if (!teammate.GetComponent<PlayerController>().isDead)
+            {
+                spectatorCamera.transform.position = teammate.transform.position;
+                spectatorCamera.transform.LookAt(teammate.transform);
+                break;
+            }
+        }
+    }
+
+    // Respawn the player and re-enable controls
+    void Respawn()
+    {
+        isDead = false;
+        ActivatePlayer();
+    }
+
+    // Reactivate the player and disable the spectator camera
+    void ActivatePlayer()
+    {
+        playerMovement.enabled = true;
+        playerCamera.enabled = true;
+        playerObject.SetActive(true);
+        spectatorCamera.SetActive(false);
+
+        // Set random spawn location based on team
+        Vector3 spawnPosition = GetRandomSpawnPosition();
+        transform.position = spawnPosition;
+    }
+
+    // Get random spawn position based on the player's team
+    Vector3 GetRandomSpawnPosition()
+    {
+        if (teamID == 1)
+        {
+            return TeamManager.Instance.GetRandomSpawnPosition(1);
+        }
+        else
+        {
+            return TeamManager.Instance.GetRandomSpawnPosition(2);
+        }
+    }
+
+    // Cycle between teammates for spectating
+    void CycleTeammates(int direction)
+    {
+        int startIndex = currentTeammateIndex;
+        do
+        {
+            currentTeammateIndex = (currentTeammateIndex + direction + teammates.Length) % teammates.Length;
+        } while (teammates[currentTeammateIndex].GetComponent<PlayerController>().isDead && currentTeammateIndex != startIndex);
+
+        // Start following the selected teammate
+        spectatorCamera.GetComponent<SpectatorCamera>().StartFollowing(teammates[currentTeammateIndex].transform);
+    }
+
+    // Collect materials (called when the player picks up an item)
+    [Command]
+    public void CmdCollectMaterial(string materialType, int amount)
+    {
+        switch (materialType)
+        {
+            case "wood":
+                wood += amount;
+                break;
+            case "stone":
+                stone += amount;
+                break;
+            case "metal":
+                metal += amount;
+                break;
+        }
+        RpcUpdateMaterials(materialType, amount);
+    }
+
+    [ClientRpc]
+    void RpcUpdateMaterials(string materialType, int amount)
+    {
+        switch (materialType)
+        {
+            case "wood":
+                wood += amount;
+                break;
+            case "stone":
+                stone += amount;
+                break;
+            case "metal":
+                metal += amount;
+                break;
+        }
+    }
+}
